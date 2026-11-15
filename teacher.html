@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Пробник ЕГЭ · учитель</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"><div class="center"><p class="muted">Загрузка…</p></div></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+const app = document.getElementById('app');
+let PASS = (() => { try { return sessionStorage.getItem('probnik_t') || ''; } catch (e) { return ''; } })();
+let DATA = null, pollT = null, lastErr = null;
+const studentLink = code => new URL('index.html?k=' + encodeURIComponent(code), location.href).href;
+const tapi = (action, data) => api(action, { password: PASS, ...(data || {}) });
+
+function login(msg) {
+  const inp = el('input', { id: 'pw', type: 'password', autocomplete: 'current-password' });
+  const go = async () => { PASS = inp.value; try { sessionStorage.setItem('probnik_t', PASS); } catch (e) { } refresh(true); };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  app.textContent = '';
+  app.append(el('div', { class: 'center' }, el('div', { class: 'card home' },
+    el('span', { class: 'kim', text: 'страница учителя' }), el('h1', { text: 'Пробник ЕГЭ' }),
+    msg ? el('div', { class: 'notice bad', text: msg }) : null,
+    el('label', { class: 'f', for: 'pw' }, 'Пароль учителя (тот, что вы вписали в скрипт таблицы)', inp),
+    el('div', { class: 'row' }, el('button', { class: 'btn primary', type: 'button', text: 'Войти', onclick: go })))));
+  inp.focus();
+}
+async function refresh(first) {
+  clearTimeout(pollT);
+  if (!PASS) return login();
+  let r;
+  try { r = await tapi('t_overview'); }
+  catch (e) { lastErr = e.code === 'no_api' ? e.message : 'Нет связи с таблицей. Повторю через несколько секунд.'; if (first || !DATA) login(lastErr); else renderErr(); pollT = setTimeout(refresh, 8000); return; }
+  if (!r.ok) {
+    if (r.error === 'auth') { PASS = ''; try { sessionStorage.removeItem('probnik_t'); } catch (e) { } return login('Неверный пароль.'); }
+    if (r.error === 'set_password') return login('Сначала поменяйте пароль в скрипте таблицы (строка TEACHER_PASSWORD) и разверните новую версию.');
+    lastErr = 'Ошибка таблицы: ' + (r.message || r.error); renderErr(); pollT = setTimeout(refresh, 8000); return;
+  }
+  lastErr = null; DATA = r;
+  render();
+  pollT = setTimeout(refresh, 8000);
+}
+function renderErr() { const b = $('#errbar'); if (b) { b.hidden = !lastErr; b.textContent = lastErr || ''; } }
+
+function render() {
+  const y = window.scrollY;
+  const keepOpen = new Set([...document.querySelectorAll('details[open]')].map(d => d.id));
+  app.textContent = '';
+  const wrap = el('div', { class: 'wrap' });
+  wrap.append(
+    el('div', { class: 'topbar' },
+      el('div', { class: 'brand' }, el('h1', { text: DATA.title }), el('span', { class: 'kim', text: 'учитель' })),
+      el('div', { class: 'row' }, el('span', { class: 'small muted', text: 'Обновлено в ' + fmtTime(Date.now()) }),
+        el('button', { class: 'btn sm', type: 'button', text: 'Выйти', onclick: () => { PASS = ''; try { sessionStorage.removeItem('probnik_t'); } catch (e) { } login(); } }))),
+    el('div', { class: 'notice bad', id: 'errbar', hidden: true }),
+    examCard(), studentsCard());
+  const atts = DATA.attempts.slice().sort((a, b) => b.startedAt - a.startedAt);
+  if (!atts.length) wrap.append(el('div', { class: 'card' }, el('h2', { text: 'Попыток пока нет' }), el('p', { class: 'muted', text: 'Когда ученик начнёт экзамен, здесь появятся его ответы, баллы, журнал и состояние в реальном времени. Страница обновляется сама каждые 8 секунд.' })));
+  atts.forEach(a => wrap.append(attemptCard(a)));
+  app.append(wrap);
+  document.querySelectorAll('details').forEach(d => { if (keepOpen.has(d.id)) d.open = true; });
+  window.scrollTo(0, y);
+  renderErr();
+}
+function examCard() {
+  const open = DATA.open;
+  return el('div', { class: 'card' },
+    el('div', { class: 'row' },
+      el('span', { class: 'pill ' + (open ? 'ok' : 'grey') }, el('span', { class: 'dot' }), open ? 'Экзамен открыт: ученики с кодом могут начать' : 'Экзамен закрыт: начать нельзя'),
+      el('span', { class: 'spacer' }),
+      confirmBtn(open ? 'Закрыть экзамен' : 'Открыть экзамен', 'Нажмите ещё раз для подтверждения', open ? 'danger' : 'primary', async () => { const r = await tapi('t_open', { open: !open }); if (!r.ok) toast(r.error); refresh(); })),
+    el('p', { class: 'small muted', text: `${DATA.durationMin} минут на работу. Открывайте экзамен прямо перед началом. Закрытие не прерывает уже начатые работы, а только запрещает начинать новые.` }));
+}
+function studentsCard() {
+  const name = el('input', { id: 'newname', placeholder: 'Имя ученика', style: 'min-width:220px' });
+  const add = async () => {
+    const r = await tapi('t_addStudent', { name: name.value });
+    if (!r.ok) return toast(r.error);
+    toast('Добавлен: ' + r.name + ', код ' + r.code); refresh();
+  };
+  const list = el('div', { class: 'flist' });
+  DATA.students.forEach(s => {
+    const link = studentLink(s.code);
+    list.append(el('div', { class: 'fitem' },
+      el('span', { style: 'font-weight:600', text: s.name }),
+      el('span', { class: 'nm', text: s.code }),
+      el('span', { class: 'small muted', style: 'overflow-wrap:anywhere', text: link }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn sm', type: 'button', text: 'Скопировать ссылку', onclick: () => navigator.clipboard.writeText(link).then(() => toast('Ссылка скопирована'), () => toast(link)) }),
+      confirmBtn('Удалить', 'Точно удалить?', 'danger sm', async () => { await tapi('t_removeStudent', { code: s.code }); refresh(); })));
+  });
+  return el('div', { class: 'card' },
+    el('h2', { text: 'Ученики' }),
+    el('p', { class: 'small muted', text: 'У каждого ученика свой код. Отправьте ему ссылку: код в ней уже есть. Одна попытка на код.' }),
+    DATA.students.length ? list : el('p', { class: 'muted', text: 'Пока никого. Добавьте ученика, чтобы получить для него ссылку. Для проверки сайта можно добавить себя.' }),
+    el('div', { class: 'row' }, el('label', { class: 'f', for: 'newname' }, 'Новый ученик', name), el('button', { class: 'btn', type: 'button', text: 'Добавить', style: 'align-self:flex-end', onclick: add })));
+}
+const ST_LABEL = { active: 'на странице экзамена', blur: 'переключился на другое окно', hidden: 'ушёл со страницы', nofs: 'вне полноэкранного режима', locked: 'открыл экзамен в другом месте', finished: 'сдал работу' };
+const FLAG = new Set(['hidden', 'blur', 'fs_exit', 'paste_block', 'takeover', 'printscreen', 'devkeys', 'reload', 'offline']);
+function attemptCard(a) {
+  const ended = a.status === 'finished';
+  const ev = (a.events || []).slice().sort((x, y) => x.srv - y.srv || x.at - y.at);
+  // pair leaves with returns
+  let open = null, leaves = 0, away = 0, fs = 0, paste = 0, stillAway = false;
+  for (const e of ev) {
+    if (e.type === 'hidden' || e.type === 'blur') { if (!open) { open = e; leaves++; } else if (e.type === 'hidden') open.type = 'hidden'; }
+    else if (e.type === 'back' && open) { open.dur = e.dur; away += e.dur || 0; open = null; }
+    if (e.type === 'fs_exit') fs++;
+    if (e.type === 'paste_block') paste++;
+  }
+  if (open) stillAway = true;
+  const now = Clock.now();
+  const silent = !ended && a.lastSeen && now - a.lastSeen > 50000;
+  const card = el('div', { class: 'card' });
+  let live;
+  if (ended) live = el('span', { class: 'pill grey' }, el('span', { class: 'dot' }), a.reason === 'timeout' ? 'время вышло' : 'работа сдана');
+  else if (silent) live = el('span', { class: 'pill warn' }, el('span', { class: 'dot' }), 'нет связи ' + fmtDur(now - a.lastSeen) + ' (закрыл страницу или пропал интернет)');
+  else live = el('span', { class: 'pill ' + (a.state === 'active' ? 'ok' : 'bad') }, el('span', { class: 'dot' }), (ST_LABEL[a.state] || a.state) + (a.task ? ' · задание ' + parseInt(String(a.task).slice(1), 10) : ''));
+  card.append(el('div', { class: 'topbar' },
+    el('div', { class: 'stack', style: 'gap:2px' }, el('h2', { text: a.name + ' · ' + a.code }),
+      el('p', { class: 'small muted', text: 'Начал ' + fmtDate(a.startedAt) + (a.finishedAt ? ', сдал в ' + fmtTime(a.finishedAt) : ', осталось ' + fmtHMS(a.deadline - now)) + (a.extraMin ? ` (добавлено ${a.extraMin} мин)` : '') })),
+    live));
+  const stat = (v, l, bad) => el('div', { class: 'stat' + (bad ? ' bad' : '') }, el('b', { text: v }), el('span', { class: 'small muted', text: l }));
+  card.append(el('div', { class: 'stats' },
+    stat(a.pts + ' / ' + a.max, 'первичных баллов'),
+    stat(String(leaves), plural(leaves, 'уход', 'ухода', 'уходов') + ' со страницы', leaves > 0),
+    stat(fmtDur(away) + (stillAway ? '+' : ''), 'всего вне страницы', away > 0 || stillAway),
+    stat(String(fs), 'выходов из полноэкранного', fs > 0),
+    stat(String(paste), 'вставок текста извне', paste > 0)));
+  // tasks
+  const tb = el('table', { class: 't' });
+  tb.append(el('tr', null, ['№', 'Ответ ученика', 'Правильный', 'Баллы', 'Время', ''].map(h => el('th', { text: h }))));
+  const showGrid = g => trimRows(g).map(r => r.join(' ')).join(' / ') || '—';
+  for (const g of a.per) {
+    const time = (a.taskTime || {})[g.id] || 0;
+    tb.append(el('tr', null,
+      el('td', { class: 'num', text: g.n }),
+      el('td', { class: 'num', text: showGrid(a.answers[g.id]) }),
+      el('td', { class: 'num muted', text: showGrid(g.key) }),
+      el('td', null, el('span', { class: 'pill ' + ({ ok: 'ok', part: 'warn', bad: 'bad', empty: 'grey', nokey: 'grey' }[g.status]), text: g.status === 'nokey' ? 'нет ключа' : g.pts + ' из ' + g.max })),
+      el('td', { class: 'num', text: time ? fmtDur(time) : '—' }),
+      el('td', null, el('button', { class: 'btn sm', type: 'button', text: 'Код', onclick: () => showCode(a, g) }))));
+  }
+  const d1 = el('details', { id: 'ans-' + a.code }, el('summary', { style: 'cursor:pointer;font-weight:600', text: 'Ответы по заданиям' }), el('div', { class: 'tablewrap', style: 'margin-top:10px' }, tb));
+  // timeline
+  const tl = el('div', { class: 'tl' });
+  for (const e of ev) {
+    if (e.type === 'back') continue;
+    const extra = [];
+    if (e.type === 'hidden' || e.type === 'blur') extra.push(e.dur != null ? 'на ' + fmtDur(e.dur) : (ended ? 'не вернулся' : 'ещё не вернулся'));
+    if (e.type === 'fs_back' || e.type === 'offline') extra.push('через ' + fmtDur(e.dur || 0));
+    if (e.len) extra.push(e.len + ' ' + plural(e.len, 'символ', 'символа', 'символов'));
+    if (e.task) extra.push('задание ' + parseInt(String(e.task).slice(1), 10));
+    tl.append(el('div', { class: 'tl-item' + (FLAG.has(e.type) ? ' flag' : '') }, el('span', { class: 'tm', text: fmtTime(e.srv || e.at) }), el('span', { class: 'what', text: EV[e.type] || e.type }), el('span', { class: 'small muted', text: extra.join(' · ') })));
+  }
+  const d2 = el('details', { id: 'log-' + a.code, open: true }, el('summary', { style: 'cursor:pointer;font-weight:600', text: 'Журнал (' + ev.filter(e => FLAG.has(e.type)).length + ' подозрительных событий)' }),
+    el('p', { class: 'small muted', style: 'margin:6px 0', text: 'Время — по часам сервера. Красным отмечено то, на что стоит обратить внимание.' }), tl);
+  card.append(d1, d2);
+  const actions = el('div', { class: 'row' }, el('span', { class: 'spacer' }));
+  if (!ended) actions.append(el('button', { class: 'btn', type: 'button', text: 'Добавить 15 минут', onclick: async () => { const r = await tapi('t_extend', { code: a.code, min: 15 }); toast(r.ok ? 'Добавлено 15 минут' : 'Не получилось: ' + r.error); refresh(); } }));
+  actions.append(confirmBtn('Сбросить попытку', 'Ответы и журнал удалятся. Нажмите ещё раз', 'danger', async () => { const r = await tapi('t_reset', { code: a.code }); toast(r.ok ? 'Попытка сброшена, ученик может начать заново' : r.error); refresh(); }));
+  card.append(actions);
+  return card;
+}
+const codeCache = {};
+async function showCode(a, g) {
+  const pre = el('pre', { class: 'viewer-pre', text: 'Загрузка…' });
+  openModal('Код ученика · задание ' + g.n, pre);
+  try {
+    const r = await tapi('t_code', { code: a.code });
+    const c = r.ok && r.codes[g.id];
+    pre.textContent = c && c.trim() ? c : 'Ученик не писал код в этом задании.';
+  } catch (e) { pre.textContent = 'Не удалось загрузить.'; }
+}
+refresh(true);
+</script>
+</body>
+</html>

@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Пробник ЕГЭ по информатике</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"><div class="center"><p class="muted">Загрузка…</p></div></div>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script>
+'use strict';
+const app = document.getElementById('app');
+let CODE = (new URLSearchParams(location.search).get('k') || lsGet('probnik_code') || '').trim().toUpperCase();
+let HELLO = null, E = null, homeTimer = null;
+const newSession = () => 's' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+const fsSupported = () => !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+function reqFs() { try { const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen({ navigationUI: 'hide' }); p && p.catch(() => {}); } catch (e) { } }
+const ERR = { no_code: 'Такого кода нет. Проверь, что он введён без ошибок, или спроси учителя.', closed: 'Учитель ещё не открыл экзамен.', locked: 'Экзамен открыт на другом устройстве.', no_api: 'Сайт ещё не настроен учителем.' };
+const errText = e => ERR[e && (e.error || e.code)] || (e && (e.message || e.error)) || 'Нет связи с сервером. Проверь интернет.';
+
+function screen(...kids) { app.textContent = ''; const c = el('div', { class: 'card home' }, kids); app.append(el('div', { class: 'center' }, c)); return c; }
+const head = () => [el('span', { class: 'kim', text: 'КИМ · информатика' }), el('h1', { text: (HELLO && HELLO.title) || 'Пробник ЕГЭ по информатике' })];
+
+/* ---------- home ---------- */
+function askCode(msg) {
+  const inp = el('input', { id: 'code', value: CODE, autocomplete: 'off', placeholder: 'Например, KQMTRB', style: 'font-family:var(--font-mono);font-size:18px;letter-spacing:.1em;text-transform:uppercase' });
+  const go = () => { CODE = inp.value.trim().toUpperCase(); if (CODE) { lsSet('probnik_code', CODE); hello(); } };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  screen(...head(), msg ? el('div', { class: 'notice bad', text: msg }) : null,
+    el('label', { class: 'f', for: 'code' }, 'Код доступа от учителя', inp),
+    el('div', { class: 'row' }, el('button', { class: 'btn primary', type: 'button', text: 'Продолжить', onclick: go })));
+  inp.focus();
+}
+async function hello() {
+  clearTimeout(homeTimer);
+  if (!CODE) return askCode();
+  if (!HELLO) screen(el('p', { class: 'muted', text: 'Загрузка…' }));
+  let r;
+  try { r = await api('hello', { code: CODE }); } catch (e) { screen(...head(), el('div', { class: 'notice bad', text: errText(e) }), el('button', { class: 'btn', type: 'button', text: 'Попробовать ещё раз', onclick: hello })); return; }
+  if (!r.ok) { if (r.error === 'no_code') { lsSet('probnik_code', null); return askCode(errText(r)); } screen(...head(), el('div', { class: 'notice bad', text: errText(r) })); return; }
+  HELLO = r; lsSet('probnik_code', CODE);
+  if (E) return;
+  home();
+}
+function home() {
+  const r = HELLO, a = r.attempt;
+  if (a && a.status === 'finished') {
+    screen(...head(), el('p', { text: 'Работа сдана. Результаты увидит учитель.' }),
+      el('p', { class: 'muted small', text: 'Начало ' + fmtDate(a.startedAt) + (a.finishedAt ? ', сдана в ' + fmtTime(a.finishedAt) : '') + '.' }));
+    return;
+  }
+  const hi = el('p', { text: 'Привет, ' + r.name + '!' });
+  if (a && a.status === 'active') {
+    screen(...head(), hi, el('div', { class: 'notice warn', text: 'Экзамен уже идёт: осталось ' + fmtHMS(a.deadline - Clock.now()) + '. Повторное открытие тоже попадает в журнал.' }),
+      el('div', { class: 'row' }, el('button', { class: 'btn primary', type: 'button', text: 'Вернуться к экзамену', onclick: () => { reqFs(); resume('resume'); } })));
+    return;
+  }
+  if (!r.open) {
+    screen(...head(), hi, el('p', { text: 'Учитель ещё не открыл экзамен. Страница проверяет это сама каждые 15 секунд.' }));
+    homeTimer = setTimeout(hello, 15000);
+    return;
+  }
+  screen(...head(), hi,
+    el('p', { class: 'muted', text: `${r.count} ${plural(r.count, 'задание', 'задания', 'заданий')}, ${r.durationMin} минут. Python и все файлы — прямо на этой странице, ничего открывать не нужно.` }),
+    el('ul', { class: 'rules' },
+      el('li', { text: 'Экзамен идёт в полноэкранном режиме. Таймер не останавливается, даже если закрыть страницу.' }),
+      el('li', { text: 'Каждый уход со страницы, переключение на другое окно, выход из полноэкранного режима и попытка вставить текст со стороны записываются с точным временем. Учитель видит этот журнал и наблюдает в реальном времени.' }),
+      el('li', { text: 'Копировать условия нельзя. Решай задания во встроенном Python: файлы задания уже лежат рядом с кодом.' }),
+      el('li', { text: 'Ответы сохраняются автоматически. Когда закончишь, нажми «Завершить экзамен».' })),
+    el('div', { class: 'row' }, confirmBtn('Начать экзамен', 'Таймер запустится. Начать?', 'primary', async () => { reqFs(); await begin(); })));
+}
+async function begin() {
+  const session = newSession();
+  let r;
+  try { r = await api('start', { code: CODE, session }); } catch (e) { toast(errText(e)); return; }
+  if (!r.ok) { if (r.error === 'exists') return resume('resume'); toast(errText(r)); return hello(); }
+  startExam(r, session);
+}
+async function resume(kind) {
+  const session = newSession();
+  let r;
+  try { r = await api(kind, { code: CODE, session }); } catch (e) { toast(errText(e)); return; }
+  if (!r.ok) { if (r.error === 'finished') { HELLO.attempt = r.attempt; return home(); } toast(errText(r)); return hello(); }
+  startExam(r, session);
+}
+
+/* ---------- exam ---------- */
+function startExam(r, session) {
+  const a = r.attempt;
+  E = {
+    session, title: r.variant.title, tasks: r.variant.tasks, cur: 0,
+    answers: a.answers || {}, taskTime: a.taskTime || {}, codes: r.codes || {},
+    deadline: a.deadline, finished: false, away: null, fsOut: null, lockLost: false, offlineSince: null,
+    outbox: [], lastCopy: null, listeners: [], codeSavers: {}, taskEnter: performance.now(), keep: false
+  };
+  E.saver = scheduler(saveNow, 2000, () => {});
+  renderExam();
+  attachGuards();
+  if (!fsSupported()) logEvent({ type: 'fs_unavail' });
+  Py.onState = renderPyState; Py.start();
+  E.timer = setInterval(tick, 1000); tick();
+  E.beat = setInterval(() => E && E.saver.flush(), 20000);
+}
+async function saveNow() {
+  if (!E || E.lockLost || E.finished) return;
+  accTime();
+  const ev = E.outbox.splice(0);
+  const keep = E.keep; E.keep = false;
+  let r;
+  try { r = await api('save', { code: CODE, session: E.session, answers: E.answers, taskTime: E.taskTime, state: stateNow(), task: curTid(), answered: answeredCount(), events: ev }, { keepalive: keep }); }
+  catch (e) { E.outbox.unshift(...ev); setOffline(true); return; }
+  setOffline(false);
+  handleResp(r, ev);
+}
+function handleResp(r, ev) {
+  if (!E) return;
+  if (r.ok) { if (r.attempt && r.attempt.deadline && r.attempt.deadline !== E.deadline) { E.deadline = r.attempt.deadline; tick(); } return; }
+  if (r.error === 'locked') { if (ev) E.outbox.unshift(...ev); E.lockLost = true; updateShield(); return; }
+  if (r.error === 'finished') { endScreen(r.attempt); return; }
+  toast('Сервер ответил ошибкой: ' + (r.message || r.error));
+}
+function setOffline(off) {
+  if (!E) return;
+  const bar = $('#netbar');
+  if (off && !E.offlineSince) E.offlineSince = performance.now();
+  if (!off && E.offlineSince) { const d = performance.now() - E.offlineSince; E.offlineSince = null; if (d > 30000) logEvent({ type: 'offline', dur: Math.round(d) }); }
+  if (bar) bar.hidden = !off;
+}
+function teardown() {
+  if (!E) return;
+  clearInterval(E.timer); clearInterval(E.beat);
+  for (const [t, ev, fn, opt] of E.listeners) t.removeEventListener(ev, fn, opt);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  E = null;
+  document.querySelectorAll('.modal,.shield').forEach(x => x.remove());
+}
+function endScreen(att) {
+  teardown();
+  HELLO = { ...(HELLO || {}), attempt: att || { status: 'finished', startedAt: Date.now() } };
+  home();
+}
+const curTask = () => E.tasks[E.cur];
+const curTid = () => curTask() && curTask().id;
+const answered = id => trimRows(E.answers[id]).length > 0;
+const answeredCount = () => E.tasks.filter(t => answered(t.id)).length;
+function stateNow() { return E.finished ? 'finished' : E.lockLost ? 'locked' : E.away ? E.away.type : (fsSupported() && !document.fullscreenElement) ? 'nofs' : 'active'; }
+function accTime() {
+  const now = performance.now();
+  if (!E.away && !E.finished && curTid()) E.taskTime[curTid()] = (E.taskTime[curTid()] || 0) + Math.round(now - E.taskEnter);
+  E.taskEnter = now;
+}
+function logEvent(ev, urgent) {
+  if (!E || E.finished) return;
+  E.outbox.push({ at: Math.round(Clock.now()), ...ev });
+  if (urgent) { E.keep = true; E.saver.flush(); } else E.saver.kick();
+}
+
+function renderExam() {
+  app.textContent = '';
+  const root = el('div', { class: 'exam', id: 'exam' },
+    el('header', { class: 'exam-top' },
+      el('div', { class: 'brand' }, el('span', { class: 'kim', text: 'КИМ' }), el('h2', { text: E.title, style: 'font-size:16px' })),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'small muted', text: 'Осталось' }), el('span', { class: 'timer', id: 'timer', text: '--:--:--' }),
+      el('span', { id: 'guardpill' }),
+      confirmBtn('Завершить экзамен', 'Сдать работу? Изменить ответы будет нельзя', 'primary', () => finishExam('finish'))),
+    el('div', { class: 'netbad', id: 'netbar', hidden: true, text: 'Нет связи с сервером. Продолжай решать: ответы сохранятся, когда связь вернётся.' }),
+    el('div', { class: 'exam-body' },
+      el('nav', { class: 'tnav', id: 'tnav', 'aria-label': 'Задания' }),
+      el('section', { class: 'tpanel', id: 'tpanel' }),
+      el('section', { class: 'pypanel', 'aria-label': 'Python' },
+        el('div', { class: 'pyhead' }, el('span', { class: 'lbl', text: 'Python 3' }), el('span', { class: 'lbl', id: 'pystate' }), el('span', { class: 'spacer' }),
+          el('button', { class: 'btn sm', type: 'button', id: 'pystop', text: 'Остановить', onclick: () => Py.stop() }),
+          el('button', { class: 'btn sm primary', type: 'button', id: 'pyrun', text: 'Запустить · Ctrl+Enter', onclick: runCode })),
+        el('div', { class: 'pyfiles', id: 'pyfiles' }),
+        el('textarea', { class: 'code', id: 'codebox', spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off', 'aria-label': 'Код на Python', wrap: 'off' }),
+        el('pre', { class: 'pyout', id: 'pyout', 'aria-live': 'polite' }))));
+  app.append(root);
+  const code = $('#codebox');
+  code.addEventListener('keydown', codeKeys);
+  code.addEventListener('input', () => { E.codes[curTid()] = code.value; saveCode(curTid()); });
+  renderNav(); renderTask(); renderPyState(); updateShield();
+}
+function renderNav() {
+  const nav = $('#tnav'); if (!nav) return;
+  nav.textContent = '';
+  E.tasks.forEach((t, i) => nav.append(el('button', { type: 'button', class: (answered(t.id) ? 'done ' : '') + (i === E.cur ? 'cur' : ''), 'aria-label': 'Задание ' + t.n, text: t.n, onclick: () => goTask(i) })));
+}
+function goTask(i) {
+  if (i < 0 || i >= E.tasks.length || i === E.cur) return;
+  accTime(); E.cur = i; renderNav(); renderTask(); E.saver.kick();
+}
+function renderTask() {
+  const p = $('#tpanel'); const t = curTask();
+  p.textContent = '';
+  p.append(el('div', { class: 'row' }, el('span', { class: 'tnum', text: t.n }), el('h2', { text: 'Задание ' + t.n }), el('span', { class: 'pill grey', text: balls(t.points || 1) })));
+  if (t.text) p.append(el('div', { class: 'cond noselect' }, t.text.split(/^```[ \t]*$/m).map((part, i) => i % 2 ? el('pre', { class: 'cond-pre', text: part.replace(/^\n|\n$/g, '') }) : part.replace(/^\n+|\n+$/g, '') ? el('div', { text: part.replace(/^\n+|\n+$/g, '') }) : null)));
+  if ((t.images || []).length) p.append(el('div', { class: 'cond-imgs noselect' }, t.images.map((src, i) => el('img', { src, alt: 'Рисунок к заданию ' + t.n, draggable: 'false' }))));
+  if ((t.files || []).length) {
+    const fl = el('div', { class: 'flist' });
+    t.files.forEach(f => fl.append(el('div', { class: 'fitem' }, el('span', { class: 'nm', text: f.name }), el('span', { class: 'small muted', text: 'в Python: ' + pyNames(f).join(', ') }), el('span', { class: 'spacer' }), el('button', { class: 'btn sm', type: 'button', text: 'Открыть', onclick: () => viewFile(f) }))));
+    p.append(el('div', { class: 'stack' }, el('h3', { text: 'Файлы к заданию' }), fl));
+  }
+  const rows = t.rows || 1, cols = t.cols || 1;
+  const cur = emptyGrid(rows, cols, E.answers[t.id]);
+  const g = el('div', { class: 'blank', style: `grid-template-columns:${rows > 1 ? 'auto ' : ''}repeat(${cols},auto)` });
+  for (let r = 0; r < rows; r++) {
+    if (rows > 1) g.append(el('span', { class: 'rl', text: r + 1 }));
+    for (let c = 0; c < cols; c++) {
+      const i = el('input', { id: `ans-${r}-${c}`, 'aria-label': `Ответ, строка ${r + 1}, ячейка ${c + 1}`, value: cur[r][c], autocomplete: 'off', spellcheck: 'false' });
+      i.addEventListener('input', () => { cur[r][c] = i.value; E.answers[t.id] = cur.map(x => x.slice()); renderNavState(); E.saver.kick(); });
+      i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); goTask(E.cur + 1); } });
+      g.append(i);
+    }
+  }
+  p.append(el('div', { class: 'stack' }, el('h3', { text: 'Ответ' }), el('p', { class: 'small muted', text: rows > 1 || cols > 1 ? 'Каждое число — в свою клетку, как в бланке ответов.' : 'Ответ сохраняется автоматически.' }), g));
+  p.append(el('div', { class: 'row' },
+    el('button', { class: 'btn', type: 'button', text: '← Предыдущее', disabled: E.cur === 0, onclick: () => goTask(E.cur - 1) }),
+    el('button', { class: 'btn', type: 'button', text: 'Следующее →', disabled: E.cur === E.tasks.length - 1, onclick: () => goTask(E.cur + 1) })));
+  const pf = $('#pyfiles'); pf.textContent = '';
+  const names = (t.files || []).flatMap(pyNames);
+  pf.append(names.length ? el('span', null, 'Файлы рядом с кодом: ', names.map((n, i) => [i ? ', ' : '', el('code', { text: n })])) : el('span', { text: 'У этого задания нет файлов.' }));
+  $('#codebox').value = E.codes[t.id] ?? (t.files && t.files.length ? `# Задание ${t.n}\nwith open('${pyNames(t.files[0])[0]}') as f:\n    data = f.read().split()\n\nprint(len(data))\n` : `# Задание ${t.n}\n\n`);
+  $('#pyout').textContent = '';
+}
+function renderNavState() { const nav = $('#tnav'); if (!nav) return; [...nav.children].forEach((b, i) => b.classList.toggle('done', answered(E.tasks[i].id))); }
+function saveCode(id) {
+  if (!E || !id) return;
+  E.codeSavers[id] ||= scheduler(async () => { if (!E || E.lockLost) return; const r = await api('code', { code: CODE, session: E.session, task: id, text: E.codes[id] || '' }); if (!r.ok) handleResp(r); }, 4000, () => {});
+  E.codeSavers[id].kick();
+}
+function tick() {
+  if (!E) return;
+  const left = E.deadline - Clock.now();
+  const t = $('#timer');
+  if (t) { t.textContent = fmtHMS(left); t.className = 'timer' + (left < 5 * 60000 ? ' bad' : left < 30 * 60000 ? ' warn' : ''); }
+  if (left <= 0 && !E.finished) finishExam('timeout');
+}
+async function finishExam(reason) {
+  if (!E || E.finished) return;
+  accTime();
+  E.away = null;
+  E.outbox.push({ at: Math.round(Clock.now()), type: reason });
+  for (const s of Object.values(E.codeSavers)) s.flush();
+  E.finished = true;
+  const ev = E.outbox.splice(0);
+  let r;
+  try { r = await api('finish', { code: CODE, session: E.session, answers: E.answers, taskTime: E.taskTime, state: 'finished', task: curTid(), answered: answeredCount(), events: ev, reason }); }
+  catch (e) { E.finished = false; E.outbox.unshift(...ev.filter(x => x.type !== reason)); toast('Не удалось сдать: нет связи. Проверь интернет и нажми ещё раз.'); if (reason === 'timeout') setTimeout(() => finishExam('timeout'), 5000); return; }
+  if (!r.ok && r.error !== 'finished') { E.finished = false; handleResp(r, ev); return; }
+  endScreen(r.attempt);
+}
+
+/* ---------- guards ---------- */
+function on(t, ev, fn, opt) { t.addEventListener(ev, fn, opt); E.listeners.push([t, ev, fn, opt]); }
+function goAway(kind) {
+  if (!E || E.finished) return;
+  if (E.away) { if (kind === 'hidden' && E.away.type === 'blur') { E.away.type = 'hidden'; logEvent({ type: 'hidden', task: curTid() }, true); } return; }
+  accTime();
+  const ev = { type: kind, task: curTid() };
+  E.away = { type: kind, t0: performance.now(), ev };
+  if (kind === 'hidden') logEvent(ev, true);
+  else { E.away.timer = setTimeout(() => { if (E && E.away && E.away.ev === ev) { E.away.sent = true; logEvent(ev); } }, 700); }
+  updateShield();
+}
+function comeBack() {
+  if (!E || !E.away) return;
+  const d = Math.round(performance.now() - E.away.t0);
+  clearTimeout(E.away.timer);
+  if (E.away.type === 'hidden' || E.away.sent || d >= 700) {
+    if (E.away.type === 'blur' && !E.away.sent) logEvent(E.away.ev);
+    logEvent({ type: 'back', of: E.away.type, dur: d });
+  }
+  E.away = null; E.taskEnter = performance.now();
+  updateShield();
+}
+const isEditable = n => n && (n.id === 'codebox' || (n.tagName === 'INPUT' && n.closest && n.closest('.blank')) || (n.closest && n.closest('#pyout')));
+function attachGuards() {
+  on(document, 'visibilitychange', () => { if (document.hidden) goAway('hidden'); else if (document.hasFocus()) comeBack(); });
+  on(window, 'blur', () => goAway('blur'));
+  on(window, 'focus', () => { if (!document.hidden) comeBack(); });
+  on(document, 'fullscreenchange', () => {
+    if (!E || E.finished) return;
+    if (!document.fullscreenElement) { E.fsOut = performance.now(); logEvent({ type: 'fs_exit', task: curTid() }); }
+    else if (E.fsOut) { logEvent({ type: 'fs_back', dur: Math.round(performance.now() - E.fsOut) }); E.fsOut = null; }
+    updateShield();
+  });
+  on(document, 'copy', onCopy, true);
+  on(document, 'cut', onCopy, true);
+  on(document, 'paste', e => {
+    const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
+    const files = e.clipboardData && e.clipboardData.files && e.clipboardData.files.length;
+    if (files || (txt && txt !== E.lastCopy)) { e.preventDefault(); logEvent({ type: 'paste_block', len: txt.length, task: curTid() }); toast('Вставлять можно только то, что скопировано на этой странице'); }
+  }, true);
+  on(document, 'drop', e => e.preventDefault(), true);
+  on(document, 'dragstart', e => { if (!isEditable(e.target)) e.preventDefault(); }, true);
+  on(document, 'contextmenu', e => e.preventDefault(), true);
+  on(document, 'keydown', e => {
+    const k = (e.key || '').toLowerCase(), mod = e.ctrlKey || e.metaKey;
+    if (e.key === 'F12' || (mod && e.shiftKey && ['i', 'j', 'c'].includes(k)) || (mod && e.altKey && ['i', 'j'].includes(k)) || (mod && k === 'u')) { e.preventDefault(); logEvent({ type: 'devkeys', task: curTid() }); return; }
+    if (mod && ['p', 's'].includes(k)) e.preventDefault();
+  }, true);
+  on(document, 'keyup', e => { if (e.key === 'PrintScreen') logEvent({ type: 'printscreen', task: curTid() }); }, true);
+  on(window, 'pagehide', () => { if (E && !E.finished) { E.keep = true; E.saver.flush(); } });
+}
+function onCopy(e) {
+  const t = e.target;
+  let text = '';
+  if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && isEditable(t)) text = t.value.substring(t.selectionStart, t.selectionEnd);
+  else { const sel = window.getSelection(); if (sel && sel.anchorNode && isEditable(sel.anchorNode.parentElement)) text = sel.toString(); }
+  if (text) { E.lastCopy = text; return; }
+  e.preventDefault();
+}
+function updateShield() {
+  document.querySelectorAll('.shield').forEach(s => s.remove());
+  const pill = $('#guardpill');
+  if (!E || E.finished) return;
+  const noFs = fsSupported() && !document.fullscreenElement;
+  if (pill) { pill.textContent = ''; pill.append(el('span', { class: 'pill ' + (noFs ? 'bad' : 'ok') }, el('span', { class: 'dot' }), noFs ? 'не во весь экран' : 'режим экзамена')); }
+  let msg = null, btn = null;
+  if (E.lockLost) { msg = 'Экзамен открыт в другой вкладке или на другом устройстве, поэтому здесь он остановлен.'; btn = el('button', { class: 'btn primary', type: 'button', text: 'Продолжить здесь', onclick: () => { reqFs(); teardown(); resume('takeover'); } }); }
+  else if (E.away) msg = 'Окно экзамена не активно. Время отсутствия записывается в журнал.';
+  else if (noFs) { msg = 'Ты вышел из полноэкранного режима. Это записано в журнал. Вернись, чтобы продолжить.'; btn = el('button', { class: 'btn primary', type: 'button', text: 'Вернуться к экзамену', onclick: reqFs }); }
+  if (!msg) return;
+  document.body.append(el('div', { class: 'shield', role: 'alertdialog', 'aria-label': 'Экзамен на паузе' }, el('div', { class: 'card' }, el('h2', { text: 'Экзамен на паузе' }), el('p', { text: msg }), el('p', { class: 'small muted', text: 'Таймер продолжает идти.' }), btn)));
+}
+
+/* ---------- python panel ---------- */
+function renderPyState() {
+  const s = $('#pystate'); if (!s) return;
+  s.textContent = Py.msg;
+  $('#pyrun').disabled = Py.state === 'running' || Py.state === 'error';
+  $('#pystop').disabled = Py.state !== 'running';
+}
+let outBuf = [], outRaf = 0, outLen = 0;
+function appendOut(kind, s) {
+  outBuf.push([kind, s]);
+  if (!outRaf) outRaf = setTimeout(() => {
+    outRaf = 0;
+    const pre = $('#pyout'); if (!pre) { outBuf = []; return; }
+    const frag = document.createDocumentFragment();
+    for (const [k, txt] of outBuf) { outLen += txt.length; frag.append(k === 'out' ? document.createTextNode(txt) : el('span', { class: k === 'err' ? 'err' : k === 'ok' ? 'okc' : 'info', text: txt })); }
+    outBuf = [];
+    pre.append(frag);
+    while (outLen > 300000 && pre.firstChild) { outLen -= (pre.firstChild.textContent || '').length; pre.firstChild.remove(); }
+    pre.scrollTop = pre.scrollHeight;
+  }, 30);
+}
+async function runCode() {
+  if (!E || Py.state === 'running') return;
+  const t = curTask();
+  const code = $('#codebox').value;
+  E.codes[t.id] = code; saveCode(t.id);
+  $('#pyout').textContent = ''; outLen = 0;
+  Py.start();
+  if (Py.state === 'error') { appendOut('err', Py.msg + '\n'); return; }
+  if ((t.files || []).length) appendOut('info', 'Готовлю файлы задания…\n');
+  try { Py.writeFiles(await pyFilesFor(t)); } catch (e) { appendOut('err', 'Файлы задания не загрузились: ' + e.message + '\n'); }
+  const res = await Py.run(code, (k, s) => appendOut(k, s + '\n'));
+  if (res.stopped) appendOut('info', '\nОстановлено.\n');
+  else appendOut(res.ok ? 'ok' : 'info', `\n${res.ok ? 'Готово' : 'Ошибка'} · ${(res.ms / 1000).toFixed(2)} с\n`);
+}
+function codeKeys(e) {
+  const ta = e.target;
+  const insert = txt => { if (!document.execCommand('insertText', false, txt)) { ta.setRangeText(txt, ta.selectionStart, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input')); } };
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runCode(); return; }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s = ta.selectionStart, en = ta.selectionEnd, v = ta.value;
+    if (s === en && !e.shiftKey) { insert('    '); return; }
+    const ls = v.lastIndexOf('\n', s - 1) + 1;
+    const block = v.slice(ls, en);
+    const out = e.shiftKey ? block.replace(/^ {1,4}/gm, '') : block.replace(/^/gm, '    ');
+    ta.setSelectionRange(ls, en); insert(out); ta.setSelectionRange(ls, ls + out.length);
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    const s = ta.selectionStart, v = ta.value;
+    const line = v.slice(v.lastIndexOf('\n', s - 1) + 1, s);
+    let ind = line.match(/^[ \t]*/)[0];
+    if (/:\s*(#.*)?$/.test(line)) ind += '    ';
+    insert('\n' + ind);
+  }
+}
+
+hello();
+</script>
+</body>
+</html>
